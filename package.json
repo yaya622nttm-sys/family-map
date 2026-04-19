@@ -1,0 +1,17 @@
+{
+  "name": "familymap-web",
+  "version": "1.0.0",
+  "description": "家族で使えるリアルタイム位置情報共有アプリ",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "firebase": "^10.12.2"
+  },
+  "devDependencies": {
+    "vite": "^5.2.11"
+  }
+}

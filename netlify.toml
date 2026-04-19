@@ -1,0 +1,9 @@
+[build]
+  command   = "npm run build"
+  publish   = "dist"
+
+# SPA フォールバック — すべてのルートを index.html へ
+[[redirects]]
+  from   = "/*"
+  to     = "/index.html"
+  status = 200
