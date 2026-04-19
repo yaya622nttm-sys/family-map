@@ -98,7 +98,7 @@ export async function mountMap(user, onLogout) {
     updateMemberChips(members, user.userId, (targetUserId) => {
       flyToMember(map, markers, targetUserId)
     })
-    updateMemberCount(members.length)
+    // updateMemberCount removed — member info is shown only at bottom chips
   })
 
   // 自分の位置情報を取得・送信
@@ -125,8 +125,6 @@ function getMapHTML(roomCode) {
         <div class="topbar-left">
           <span class="topbar-logo">📍</span>
           <span class="topbar-title">家族マップ</span>
-          <span class="live-badge">♡ つながり中</span>
-          <span id="member-count" class="member-count">👥 0人</span>
         </div>
         <div class="topbar-right">
           <button id="btn-share" class="topbar-btn" title="ルームコードをシェア">
