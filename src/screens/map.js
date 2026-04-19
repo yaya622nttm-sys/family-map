@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────
 // マップ画面
-//  - Google Maps AdvancedMarkerElement でカスタムアイコンピン
+//  - Google Maps Marker（レガシー）でカスタムCanvasアイコンピン
 //  - Firebase リアルタイム購読でメンバー位置を更新
 //  - Geolocation watchPosition で自分の位置を継続送信
 // ─────────────────────────────────────────────────────────────
@@ -15,7 +15,9 @@ function loadMapsApi() {
   if (mapsApiLoaded) return Promise.resolve()
   return new Promise((resolve, reject) => {
     const script = document.createElement('script')
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${MAPS_API_KEY}&libraries=marker&v=beta`
+    // v=weekly を使用（AdvancedMarkerElement のmapId制限を回避するため
+    // レガシーMarkerを使う。v=betaは外部ドメインでDEMO_MAP_IDが使えない）
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${MAPS_API_KEY}&v=weekly`
     script.async = true
     script.defer = true
     script.onload  = () => { mapsApiLoaded = true; resolve() }
@@ -51,7 +53,7 @@ export async function mountMap(user, onLogout) {
 
   // Firebase 購読
   const unsubscribe = subscribeMembers(user.roomCode, (members) => {
-    updateMarkers(map, markers, members, user.userId)
+    updateMarkers(map, markers, members, user.userId)  // async だが fire-and-forget でOK
     updateMemberChips(members, user.userId, (targetUserId) => {
       flyToMember(map, markers, targetUserId)
     })
@@ -146,12 +148,11 @@ function getMapHTML(roomCode) {
 
 function initMap() {
   return new google.maps.Map(document.getElementById('gmap'), {
-    center:            { lat: 35.6812, lng: 139.7671 },
-    zoom:              14,
-    disableDefaultUI:  true,
-    zoomControl:       true,
-    mapId:             'DEMO_MAP_ID', // AdvancedMarkerElement に必要
-    gestureHandling:   'greedy',
+    center:          { lat: 35.6812, lng: 139.7671 },
+    zoom:            14,
+    disableDefaultUI: true,
+    zoomControl:     true,
+    gestureHandling: 'greedy',
     styles: [
       { featureType: 'poi', stylers: [{ visibility: 'off' }] },
       { featureType: 'transit', stylers: [{ visibility: 'simplified' }] },
@@ -159,79 +160,132 @@ function initMap() {
   })
 }
 
-// ── カスタムマーカー作成 ───────────────────────────────────
+// ── カスタムピン画像をCanvasで生成 ────────────────────────
 
-function createPinElement(member, isMe) {
-  const outer = document.createElement('div')
-  outer.className = 'map-pin' + (isMe ? ' map-pin--me' : '')
-  if (isMe) outer.setAttribute('data-me', '1')
+async function drawPinCanvas(member, isMe) {
+  const R      = 28        // アイコン半径
+  const D      = R * 2     // 直径
+  const TAIL   = 11        // しっぽの長さ
+  const LPAD   = 6         // ラベル横余白
+  const LFONTSZ = 11
+  const LHEIGHT = 18
 
-  // アイコン画像
-  const img = document.createElement('img')
-  img.src       = member.iconData || ''
-  img.alt       = member.name
-  img.className = 'map-pin__icon'
+  // 名前ラベルの幅を計測
+  const tmpC = document.createElement('canvas')
+  const tmpX = tmpC.getContext('2d')
+  tmpX.font = `bold ${LFONTSZ}px -apple-system,sans-serif`
+  const textW = tmpX.measureText(member.name).width
+  const labelW = Math.max(D, textW + LPAD * 2)
 
-  // 名前ラベル
-  const label = document.createElement('div')
-  label.className   = 'map-pin__label'
-  label.textContent = member.name
+  const W = labelW
+  const H = D + TAIL + 3 + LHEIGHT
+  const cx = W / 2
 
-  // しっぽ（三角）
-  const tail = document.createElement('div')
-  tail.className = 'map-pin__tail'
+  const canvas = document.createElement('canvas')
+  canvas.width  = W
+  canvas.height = H
+  const ctx = canvas.getContext('2d')
 
-  outer.appendChild(img)
-  outer.appendChild(label)
-  outer.appendChild(tail)
+  // ── アイコン画像（円形クリップ） ──
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(cx, R, R - 2, 0, Math.PI * 2)
+  ctx.clip()
+  if (member.iconData) {
+    const img = new Image()
+    img.src = member.iconData
+    await new Promise(res => {
+      if (img.complete) { res(); return }
+      img.onload = res; img.onerror = res
+    })
+    ctx.drawImage(img, cx - R + 2, 2, (R - 2) * 2, (R - 2) * 2)
+  }
+  ctx.restore()
 
-  // 5分以上更新なし → 半透明
-  const age = Date.now() - (member.ts || 0)
-  if (age > 5 * 60 * 1000) {
-    outer.classList.add('map-pin--stale')
+  // ── 枠線 ──
+  ctx.strokeStyle = isMe ? '#2196F3' : '#ffffff'
+  ctx.lineWidth   = isMe ? 3 : 2.5
+  ctx.shadowColor = 'rgba(0,0,0,0.35)'
+  ctx.shadowBlur  = 7
+  ctx.beginPath()
+  ctx.arc(cx, R, R - 1.5, 0, Math.PI * 2)
+  ctx.stroke()
+  ctx.shadowBlur = 0
+
+  // ── しっぽ（三角） ──
+  ctx.fillStyle = isMe ? '#2196F3' : 'rgba(15,23,42,0.85)'
+  ctx.beginPath()
+  ctx.moveTo(cx - 6, D - 3)
+  ctx.lineTo(cx + 6, D - 3)
+  ctx.lineTo(cx,     D + TAIL)
+  ctx.closePath()
+  ctx.fill()
+
+  // ── 名前ラベル背景 ──
+  const labelY = D + TAIL + 2
+  ctx.fillStyle = 'rgba(15,23,42,0.82)'
+  const lx = cx - labelW / 2
+  if (ctx.roundRect) {
+    ctx.beginPath()
+    ctx.roundRect(lx, labelY, labelW, LHEIGHT, 9)
+    ctx.fill()
+  } else {
+    ctx.fillRect(lx, labelY, labelW, LHEIGHT)
   }
 
-  return outer
+  // ── 名前テキスト ──
+  ctx.fillStyle    = '#ffffff'
+  ctx.font         = `bold ${LFONTSZ}px -apple-system,sans-serif`
+  ctx.textAlign    = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(member.name, cx, labelY + LHEIGHT / 2)
+
+  return { dataUrl: canvas.toDataURL('image/png'), anchorX: Math.round(cx), anchorY: D + TAIL }
 }
 
 // ── マーカー更新 ───────────────────────────────────────────
 
-function updateMarkers(map, markersMap, members, myUserId) {
+async function updateMarkers(map, markersMap, members, myUserId) {
   const activIds = new Set(members.map(m => m.userId))
 
   // 消えたメンバーを削除
   for (const [uid, marker] of markersMap) {
     if (!activIds.has(uid)) {
-      marker.map = null
+      marker.setMap(null)
       markersMap.delete(uid)
     }
   }
 
-  members.forEach((member) => {
-    if (!member.lat || !member.lng) return
-    const pos   = { lat: member.lat, lng: member.lng }
-    const isMe  = member.userId === myUserId
+  for (const member of members) {
+    if (!member.lat || !member.lng) continue
+    const pos  = { lat: member.lat, lng: member.lng }
+    const isMe = member.userId === myUserId
+    const stale = Date.now() - (member.ts || 0) > 5 * 60 * 1000
+
+    const { dataUrl, anchorX, anchorY } = await drawPinCanvas(member, isMe)
+    const icon = {
+      url:         dataUrl,
+      anchor:      new google.maps.Point(anchorX, anchorY),
+    }
 
     if (markersMap.has(member.userId)) {
-      // 位置とアイコン更新
-      const marker = markersMap.get(member.userId)
-      marker.position = pos
-      // ピン要素を差し替え
-      const newEl = createPinElement(member, isMe)
-      marker.content = newEl
+      const m = markersMap.get(member.userId)
+      m.setPosition(pos)
+      m.setIcon(icon)
+      m.setOpacity(stale ? 0.4 : 1.0)
     } else {
-      // 新規マーカー
-      const pinEl = createPinElement(member, isMe)
-      const marker = new google.maps.marker.AdvancedMarkerElement({
+      const m = new google.maps.Marker({
         map,
-        position: pos,
-        content:  pinEl,
-        title:    member.name,
-        zIndex:   isMe ? 999 : undefined,
+        position:  pos,
+        icon,
+        title:     member.name,
+        zIndex:    isMe ? 999 : 1,
+        optimized: false,
+        opacity:   stale ? 0.4 : 1.0,
       })
-      markersMap.set(member.userId, marker)
+      markersMap.set(member.userId, m)
     }
-  })
+  }
 }
 
 // ── メンバーチップ更新 ─────────────────────────────────────
@@ -257,8 +311,8 @@ function updateMemberChips(members, myUserId, onChipClick) {
 
 function flyToMember(map, markersMap, userId) {
   const marker = markersMap.get(userId)
-  if (!marker?.position) return
-  map.panTo(marker.position)
+  if (!marker) return
+  map.panTo(marker.getPosition())
   map.setZoom(16)
 }
 
