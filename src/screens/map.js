@@ -125,7 +125,7 @@ function getMapHTML(roomCode) {
         <div class="topbar-left">
           <span class="topbar-logo">📍</span>
           <span class="topbar-title">家族マップ</span>
-          <span class="live-badge">LIVE</span>
+          <span class="live-badge">♡ つながり中</span>
           <span id="member-count" class="member-count">👥 0人</span>
         </div>
         <div class="topbar-right">
