@@ -65,10 +65,10 @@ export function subscribeMembers(roomCode, callback) {
 }
 
 // ── ルームの存在確認（参加時）──────────────────────────────
+// membersノードは全員退出後に消えてしまうため、
+// コード形式チェックのみ行う（存在しないルームは参加後に自動生成される）
 export async function roomExists(roomCode) {
-  const database = getDB()
-  const snap = await get(ref(database, `rooms/${roomCode}/members`))
-  return snap.exists()
+  return /^[A-Z0-9]{6}$/.test(roomCode)
 }
 
 // ── メンバー削除（退出時）──────────────────────────────────

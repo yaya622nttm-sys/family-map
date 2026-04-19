@@ -160,92 +160,106 @@ function initMap() {
   })
 }
 
-// ── カスタムピン画像をCanvasで生成 ────────────────────────
+// ── カスタムピン画像をCanvasで生成（同期・シンプル版）────
 
-async function drawPinCanvas(member, isMe) {
-  const R      = 28        // アイコン半径
-  const D      = R * 2     // 直径
-  const TAIL   = 11        // しっぽの長さ
-  const LPAD   = 6         // ラベル横余白
-  const LFONTSZ = 11
-  const LHEIGHT = 18
-
-  // 名前ラベルの幅を計測
-  const tmpC = document.createElement('canvas')
-  const tmpX = tmpC.getContext('2d')
-  tmpX.font = `bold ${LFONTSZ}px -apple-system,sans-serif`
-  const textW = tmpX.measureText(member.name).width
-  const labelW = Math.max(D, textW + LPAD * 2)
-
-  const W = labelW
-  const H = D + TAIL + 3 + LHEIGHT
-  const cx = W / 2
-
+function drawPinCanvas(member, isMe) {
+  const SIZE  = 46
+  const TAIL  = 10
   const canvas = document.createElement('canvas')
-  canvas.width  = W
-  canvas.height = H
+  canvas.width  = SIZE
+  canvas.height = SIZE + TAIL
   const ctx = canvas.getContext('2d')
 
-  // ── アイコン画像（円形クリップ） ──
-  ctx.save()
+  // 背景円
   ctx.beginPath()
-  ctx.arc(cx, R, R - 2, 0, Math.PI * 2)
-  ctx.clip()
-  if (member.iconData) {
-    const img = new Image()
-    img.src = member.iconData
-    await new Promise(res => {
-      if (img.complete) { res(); return }
-      img.onload = res; img.onerror = res
-    })
-    ctx.drawImage(img, cx - R + 2, 2, (R - 2) * 2, (R - 2) * 2)
-  }
-  ctx.restore()
+  ctx.arc(SIZE / 2, SIZE / 2, SIZE / 2 - 1, 0, Math.PI * 2)
+  ctx.fillStyle = isMe ? '#2196F3' : '#E91E63'
+  ctx.fill()
 
-  // ── 枠線 ──
-  ctx.strokeStyle = isMe ? '#2196F3' : '#ffffff'
-  ctx.lineWidth   = isMe ? 3 : 2.5
-  ctx.shadowColor = 'rgba(0,0,0,0.35)'
-  ctx.shadowBlur  = 7
+  // 白枠
+  ctx.strokeStyle = '#ffffff'
+  ctx.lineWidth   = 3
   ctx.beginPath()
-  ctx.arc(cx, R, R - 1.5, 0, Math.PI * 2)
+  ctx.arc(SIZE / 2, SIZE / 2, SIZE / 2 - 2, 0, Math.PI * 2)
   ctx.stroke()
-  ctx.shadowBlur = 0
 
-  // ── しっぽ（三角） ──
-  ctx.fillStyle = isMe ? '#2196F3' : 'rgba(15,23,42,0.85)'
+  // 頭文字
+  ctx.fillStyle    = '#ffffff'
+  ctx.font         = `bold ${Math.floor(SIZE * 0.42)}px sans-serif`
+  ctx.textAlign    = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText((member.name || '?').charAt(0).toUpperCase(), SIZE / 2, SIZE / 2)
+
+  // しっぽ
+  ctx.fillStyle = isMe ? '#2196F3' : '#E91E63'
   ctx.beginPath()
-  ctx.moveTo(cx - 6, D - 3)
-  ctx.lineTo(cx + 6, D - 3)
-  ctx.lineTo(cx,     D + TAIL)
+  ctx.moveTo(SIZE * 0.38, SIZE - 2)
+  ctx.lineTo(SIZE * 0.62, SIZE - 2)
+  ctx.lineTo(SIZE * 0.50, SIZE + TAIL)
   ctx.closePath()
   ctx.fill()
 
-  // ── 名前ラベル背景 ──
-  const labelY = D + TAIL + 2
-  ctx.fillStyle = 'rgba(15,23,42,0.82)'
-  const lx = cx - labelW / 2
-  if (ctx.roundRect) {
-    ctx.beginPath()
-    ctx.roundRect(lx, labelY, labelW, LHEIGHT, 9)
-    ctx.fill()
-  } else {
-    ctx.fillRect(lx, labelY, labelW, LHEIGHT)
+  return {
+    dataUrl: canvas.toDataURL('image/png'),
+    anchorX: SIZE / 2,
+    anchorY: SIZE + TAIL,
   }
-
-  // ── 名前テキスト ──
-  ctx.fillStyle    = '#ffffff'
-  ctx.font         = `bold ${LFONTSZ}px -apple-system,sans-serif`
-  ctx.textAlign    = 'center'
-  ctx.textBaseline = 'middle'
-  ctx.fillText(member.name, cx, labelY + LHEIGHT / 2)
-
-  return { dataUrl: canvas.toDataURL('image/png'), anchorX: Math.round(cx), anchorY: D + TAIL }
 }
 
-// ── マーカー更新 ───────────────────────────────────────────
+// アイコン画像をCanvasに非同期で重ねてマーカーを更新する
+async function applyIconToMarker(marker, member, isMe) {
+  if (!member.iconData) return
+  try {
+    const SIZE = 46
+    const TAIL = 10
+    const canvas = document.createElement('canvas')
+    canvas.width  = SIZE
+    canvas.height = SIZE + TAIL
+    const ctx = canvas.getContext('2d')
 
-async function updateMarkers(map, markersMap, members, myUserId) {
+    const img = new Image()
+    img.src = member.iconData
+    await new Promise((res) => {
+      const t = setTimeout(res, 3000)
+      img.onload  = () => { clearTimeout(t); res() }
+      img.onerror = () => { clearTimeout(t); res() }
+    })
+    if (!img.naturalWidth) return
+
+    // 円形クリップで画像を描画
+    ctx.save()
+    ctx.beginPath()
+    ctx.arc(SIZE / 2, SIZE / 2, SIZE / 2 - 3, 0, Math.PI * 2)
+    ctx.clip()
+    ctx.drawImage(img, 3, 3, SIZE - 6, SIZE - 6)
+    ctx.restore()
+
+    // 枠
+    ctx.strokeStyle = isMe ? '#2196F3' : '#ffffff'
+    ctx.lineWidth   = 3
+    ctx.beginPath()
+    ctx.arc(SIZE / 2, SIZE / 2, SIZE / 2 - 2, 0, Math.PI * 2)
+    ctx.stroke()
+
+    // しっぽ
+    ctx.fillStyle = isMe ? '#2196F3' : 'rgba(20,20,20,0.75)'
+    ctx.beginPath()
+    ctx.moveTo(SIZE * 0.38, SIZE - 2)
+    ctx.lineTo(SIZE * 0.62, SIZE - 2)
+    ctx.lineTo(SIZE * 0.50, SIZE + TAIL)
+    ctx.closePath()
+    ctx.fill()
+
+    marker.setIcon({
+      url:    canvas.toDataURL('image/png'),
+      anchor: new google.maps.Point(SIZE / 2, SIZE + TAIL),
+    })
+  } catch (_) { /* 失敗しても無視 */ }
+}
+
+// ── マーカー更新（同期部分 + 非同期アイコン更新）──────────
+
+function updateMarkers(map, markersMap, members, myUserId) {
   const activIds = new Set(members.map(m => m.userId))
 
   // 消えたメンバーを削除
@@ -256,25 +270,27 @@ async function updateMarkers(map, markersMap, members, myUserId) {
     }
   }
 
-  for (const member of members) {
-    if (!member.lat || !member.lng) continue
-    const pos  = { lat: member.lat, lng: member.lng }
-    const isMe = member.userId === myUserId
+  members.forEach((member) => {
+    if (!member.lat || !member.lng) return
+    const pos   = { lat: member.lat, lng: member.lng }
+    const isMe  = member.userId === myUserId
     const stale = Date.now() - (member.ts || 0) > 5 * 60 * 1000
 
-    const { dataUrl, anchorX, anchorY } = await drawPinCanvas(member, isMe)
+    // まず頭文字アイコンで即座に表示
+    const { dataUrl, anchorX, anchorY } = drawPinCanvas(member, isMe)
     const icon = {
-      url:         dataUrl,
-      anchor:      new google.maps.Point(anchorX, anchorY),
+      url:    dataUrl,
+      anchor: new google.maps.Point(anchorX, anchorY),
     }
 
+    let m
     if (markersMap.has(member.userId)) {
-      const m = markersMap.get(member.userId)
+      m = markersMap.get(member.userId)
       m.setPosition(pos)
       m.setIcon(icon)
       m.setOpacity(stale ? 0.4 : 1.0)
     } else {
-      const m = new google.maps.Marker({
+      m = new google.maps.Marker({
         map,
         position:  pos,
         icon,
@@ -285,7 +301,10 @@ async function updateMarkers(map, markersMap, members, myUserId) {
       })
       markersMap.set(member.userId, m)
     }
-  }
+
+    // 非同期でアイコン画像を上書き
+    applyIconToMarker(m, member, isMe)
+  })
 }
 
 // ── メンバーチップ更新 ─────────────────────────────────────
