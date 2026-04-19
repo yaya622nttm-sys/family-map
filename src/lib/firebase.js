@@ -4,6 +4,8 @@
 // データ構造:
 //   rooms/{roomCode}/members/{userId}
 //     name, iconData, lat, lng, ts
+//   rooms/{roomCode}/history/{userId}/{pushKey}
+//     lat, lng, ts
 // ─────────────────────────────────────────────────────────────
 import { initializeApp } from 'firebase/app'
 import {
@@ -11,9 +13,9 @@ import {
   ref,
   set,
   get,
+  push,
   onValue,
   off,
-  serverTimestamp,
 } from 'firebase/database'
 
 const firebaseConfig = {
@@ -75,4 +77,32 @@ export async function roomExists(roomCode) {
 export async function removeMember(roomCode, userId) {
   const database = getDB()
   await set(ref(database, `rooms/${roomCode}/members/${userId}`), null)
+}
+
+// ── 移動履歴を1件書き込む ────────────────────────────────────
+export async function writeHistory(roomCode, userId, lat, lng) {
+  const database = getDB()
+  await set(push(ref(database, `rooms/${roomCode}/history/${userId}`)), {
+    lat, lng, ts: Date.now(),
+  })
+}
+
+// ── ルーム全員の過去7日分の移動履歴を取得 ───────────────────
+// 戻り値: { [userId]: [{lat, lng, ts}, ...] } ts昇順
+export async function loadHistory(roomCode) {
+  const database = getDB()
+  const snap = await get(ref(database, `rooms/${roomCode}/history`))
+  if (!snap.exists()) return {}
+
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000
+  const result = {}
+  snap.forEach((userSnap) => {
+    const pts = []
+    userSnap.forEach((ptSnap) => {
+      const d = ptSnap.val()
+      if (d.ts > weekAgo) pts.push({ lat: d.lat, lng: d.lng, ts: d.ts })
+    })
+    if (pts.length) result[userSnap.key] = pts.sort((a, b) => a.ts - b.ts)
+  })
+  return result
 }

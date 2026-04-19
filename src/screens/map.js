@@ -4,7 +4,7 @@
 //  - Firebase リアルタイム購読でメンバー位置を更新
 //  - Geolocation watchPosition で自分の位置を継続送信
 // ─────────────────────────────────────────────────────────────
-import { updateMember, subscribeMembers, removeMember } from '../lib/firebase.js'
+import { updateMember, subscribeMembers, removeMember, writeHistory, loadHistory } from '../lib/firebase.js'
 import { saveUser, clearUser }                          from '../lib/storage.js'
 
 const MAPS_API_KEY = import.meta.env.VITE_MAPS_API_KEY
@@ -49,11 +49,52 @@ export async function mountMap(user, onLogout) {
   const map = initMap()
 
   // マーカー管理
-  const markers = new Map()   // userId → AdvancedMarkerElement
+  const markers = new Map()
+  let currentMembers = []
+
+  // 履歴ポリライン管理
+  let historyPolylines = []
+  let historyActive = false
+
+  // 履歴の表示・非表示トグル
+  async function toggleHistory() {
+    const btn = document.getElementById('btn-history')
+    if (historyActive) {
+      historyPolylines.forEach(p => p.setMap(null))
+      historyPolylines = []
+      historyActive = false
+      btn.classList.remove('topbar-btn--active')
+      return
+    }
+    historyActive = true
+    btn.classList.add('topbar-btn--active')
+
+    const COLORS = ['#2196F3', '#E91E63', '#4CAF50', '#FF9800', '#9C27B0', '#00BCD4']
+    const colorMap = {}
+    currentMembers.forEach((m, i) => {
+      colorMap[m.userId] = m.userId === user.userId ? '#2196F3' : COLORS[(i % (COLORS.length - 1)) + 1]
+    })
+
+    try {
+      const history = await loadHistory(user.roomCode)
+      for (const [uid, points] of Object.entries(history)) {
+        if (points.length < 2) continue
+        const poly = new google.maps.Polyline({
+          path:           points.map(p => ({ lat: p.lat, lng: p.lng })),
+          map,
+          strokeColor:    colorMap[uid] || '#888888',
+          strokeOpacity:  0.75,
+          strokeWeight:   4,
+        })
+        historyPolylines.push(poly)
+      }
+    } catch { /* ignore */ }
+  }
 
   // Firebase 購読
   const unsubscribe = subscribeMembers(user.roomCode, (members) => {
-    updateMarkers(map, markers, members, user.userId)  // async だが fire-and-forget でOK
+    currentMembers = members
+    updateMarkers(map, markers, members, user.userId)
     updateMemberChips(members, user.userId, (targetUserId) => {
       flyToMember(map, markers, targetUserId)
     })
@@ -61,10 +102,10 @@ export async function mountMap(user, onLogout) {
   })
 
   // 自分の位置情報を取得・送信
-  startGeolocation(user, map, markers)
+  startGeolocation(user, map)
 
   // イベントバインド
-  bindMapEvents(user, unsubscribe, onLogout)
+  bindMapEvents(user, unsubscribe, onLogout, map, toggleHistory)
 }
 
 // ── マップ HTML ─────────────────────────────────────────────
@@ -95,6 +136,13 @@ function getMapHTML(roomCode) {
               <circle cx="18" cy="19" r="3" stroke="white" stroke-width="1.8"/>
               <path d="M8.59 13.51l6.83 3.98M15.41 6.51l-6.82 3.98"
                     stroke="white" stroke-width="1.8"/>
+            </svg>
+          </button>
+          <button id="btn-history" class="topbar-btn" title="移動履歴（過去7日）">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="9" stroke="white" stroke-width="1.8"/>
+              <path d="M12 7v5l3 3" stroke="white" stroke-width="1.8"
+                    stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </button>
           <button id="btn-mypos" class="topbar-btn" title="自分の位置へ戻る">
@@ -154,7 +202,6 @@ function initMap() {
     zoomControl:     true,
     gestureHandling: 'greedy',
     styles: [
-      { featureType: 'poi', stylers: [{ visibility: 'off' }] },
       { featureType: 'transit', stylers: [{ visibility: 'simplified' }] },
     ],
   })
@@ -342,7 +389,19 @@ function updateMemberCount(count) {
 
 // ── 自分の位置情報 ─────────────────────────────────────────
 
-function startGeolocation(user, map, markersMap) {
+// 移動履歴の書き込み間引き（5分 or 100m以上移動時のみ）
+let _histLat = null, _histLng = null, _histTs = 0
+async function maybeWriteHistory(roomCode, userId, lat, lng) {
+  const now = Date.now()
+  const moved = _histLat !== null
+    ? Math.hypot(lat - _histLat, lng - _histLng) * 111000
+    : Infinity
+  if (now - _histTs < 5 * 60 * 1000 && moved < 100) return
+  _histLat = lat; _histLng = lng; _histTs = now
+  try { await writeHistory(roomCode, userId, lat, lng) } catch { /* ignore */ }
+}
+
+function startGeolocation(user, map) {
   const geoStatus = document.getElementById('geo-status')
 
   if (!navigator.geolocation) {
@@ -370,6 +429,8 @@ function startGeolocation(user, map, markersMap) {
           lng,
         })
       } catch { /* オフライン時は無視 */ }
+
+      maybeWriteHistory(user.roomCode, user.userId, lat, lng)
 
       // 初回取得時はカメラを自分の位置へ
       if (firstFix) {
@@ -400,7 +461,7 @@ function getGeoErrorMsg(err) {
 
 // ── ボタンイベント ─────────────────────────────────────────
 
-function bindMapEvents(user, unsubscribe, onLogout) {
+function bindMapEvents(user, unsubscribe, onLogout, map, toggleHistory) {
   // シェアボタン
   document.getElementById('btn-share').addEventListener('click', () => {
     document.getElementById('share-modal').style.display = 'flex'
@@ -439,11 +500,14 @@ function bindMapEvents(user, unsubscribe, onLogout) {
     document.getElementById('room-banner').style.display = 'none'
   })
 
+  // 移動履歴トグル
+  document.getElementById('btn-history').addEventListener('click', toggleHistory)
+
   // 自分の位置へ戻る
   document.getElementById('btn-mypos').addEventListener('click', () => {
     navigator.geolocation?.getCurrentPosition((pos) => {
       const { latitude: lat, longitude: lng } = pos.coords
-      map?.panTo({ lat, lng })
+      map.panTo({ lat, lng })
     })
   })
 

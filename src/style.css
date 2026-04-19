@@ -314,6 +314,7 @@ html, body {
 }
 .topbar-btn:hover { background: rgba(255,255,255,.22); }
 .topbar-btn--danger:hover { background: rgba(244,67,54,.35); }
+.topbar-btn--active { background: rgba(33,150,243,.5) !important; }
 
 /* ルームコードバナー */
 .room-banner {
